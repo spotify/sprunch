@@ -1,0 +1,11 @@
+{
+    "name": "TrackPlayedMessage",
+    "namespace": "com.spotify.example.records",
+    "type": "record",
+    "fields": [
+        {"name": "trackName", "type": "string"},
+        {"name": "artistName", "type": "string"},
+        {"name": "userCountry", "type": "string"},
+        {"name": "durationMs", "type": "int"}
+    ]
+}

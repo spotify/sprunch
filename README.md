@@ -9,6 +9,32 @@ The two features which Sprunch aims to provide on top of Crunch are:
 1. Expression of MapFn, DoFn, CombineFn and FilterFn in terms of lambda expressions
 2. Implicit resolution of PTypes at compile time, so no need to specify a destination PType for your operation
 
+```scala
+
+object Examples {
+  /** Outputs unique "words" in input along with the number of occurrences in the form "word:count" */
+  def wordCount(lines: PCollection[String]) =
+    lines.flatMap(_.split("\\s+"))
+         .count()
+         .map(wordCount => wordCount.first() + ":" + wordCount.second())
+
+  /** Count the number of plays for each distinct pair of userCountry and artistName */
+  def countryArtistPlays(messages: PCollection[TrackPlayedMessage]) =
+    messages.map(msg => CPair.of(msg.getUserCountry, msg.getArtistName))
+            .count()
+            .map(countryArtistPlays => new CountryArtistPlays(countryArtistPlays.first().first(), countryArtistPlays.first().second(), countryArtistPlays.second()))
+
+  /** Sum the total plays for each country using CountryArtistPlays as a starting point */
+  def sumPlaysByCountry(records: PCollection[CountryArtistPlays]) =
+    records.mapToTable(rec => (rec.getCountry, rec.getPlays))
+           .groupByKey()
+           .foldValues(0L, _+_)
+           .map(countryPlays => countryPlays.first() + ":" + countryPlays.second())
+
+}
+
+```
+
 Differences from Scrunch
 -----
 

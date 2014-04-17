@@ -1,0 +1,10 @@
+{
+    "name": "CountryArtistPlays",
+    "namespace": "com.spotify.example.records",
+    "type": "record",
+    "fields": [
+        {"name": "country", "type": "string"},
+        {"name": "artist", "type": "string"},
+        {"name": "plays", "type": "long"}
+    ]
+}
