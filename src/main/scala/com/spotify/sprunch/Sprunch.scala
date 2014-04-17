@@ -59,7 +59,7 @@ object Sprunch {
       underlying.parallelDo(new Fns.SFlatMap(mapFn), pType)
     def extractKey[K](extractKeyFn: T => K)(implicit pType: PType[K]) =
       underlying.by(new Fns.SMap(extractKeyFn), pType)
-    def filter(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
+    def filterBy(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
   }
 
   class SecondarySortableTable[GroupKey, SortKey, Value](val underlying: PTable[GroupKey, CPair[SortKey, Value]]) {

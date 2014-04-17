@@ -50,4 +50,25 @@ class ExamplesTest {
     )
     Assert.assertEquals(expected, output.asScala.toSet)
   }
+
+  @Test
+  def testFilterTrackPlayedMessage() {
+    val output = Examples.filterTrackPlayedMessages(
+      MemPipeline.typedCollectionOf(Avros.specifics(classOf[TrackPlayedMessage]),
+        new TrackPlayedMessage("trk", "Heretics", "UK", 10000),
+        new TrackPlayedMessage("trk", "Heretics", "SE", 60000),
+        new TrackPlayedMessage("trk", "Heretics", "SE", 60000),
+        new TrackPlayedMessage("trk", "Demoscene Time Machine", "SE", 60000),
+        new TrackPlayedMessage("trk", "Demoscene Time Machine", "SE", 29999),
+        new TrackPlayedMessage("trk", "Heretics", "DE", 60000)
+      )).materialize()
+
+    val expected = Set(
+      new TrackPlayedMessage("trk", "Heretics", "SE", 60000),
+      new TrackPlayedMessage("trk", "Heretics", "SE", 60000),
+      new TrackPlayedMessage("trk", "Demoscene Time Machine", "SE", 60000)
+    )
+
+    Assert.assertEquals(expected, output.asScala.toSet)
+  }
 }

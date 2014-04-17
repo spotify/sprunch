@@ -3,7 +3,6 @@ package com.spotify.sprunch
 import org.apache.crunch.{PCollection, Pair=>CPair}
 import Sprunch.Upgrades._
 import Sprunch.Avro._
-import scala.collection.JavaConversions._
 import com.spotify.example.records.{CountryArtistPlays, TrackPlayedMessage}
 
 object Examples {
@@ -27,5 +26,9 @@ object Examples {
            .groupByKey()
            .foldValues(0L, _+_)
            .map(countryPlays => countryPlays.first() + ":" + countryPlays.second())
+
+  /** Output all TrackPlayedMessages for which userCountry="SE" and duration > 30 seconds */
+  def filterTrackPlayedMessages(message: PCollection[TrackPlayedMessage]) =
+    message.filterBy(msg => msg.getUserCountry.equals("SE") && msg.getDurationMs > 30000)
 
 }
