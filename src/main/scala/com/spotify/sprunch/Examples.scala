@@ -17,7 +17,9 @@ object Examples {
   def countryArtistPlays(messages: PCollection[TrackPlayedMessage]) =
     messages.map(msg => CPair.of(msg.getUserCountry, msg.getArtistName))
             .count()
-            .map(countryArtistPlays => new CountryArtistPlays(countryArtistPlays.first().first(), countryArtistPlays.first().second(), countryArtistPlays.second()))
+            .map(rec => new CountryArtistPlays(rec.first().first(),
+                                               rec.first().second(),
+                                               rec.second()))
 
   /** Sum the total plays for each country using CountryArtistPlays as a starting point */
   def sumPlaysByCountry(records: PCollection[CountryArtistPlays]) =

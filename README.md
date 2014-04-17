@@ -12,6 +12,7 @@ The two features which Sprunch aims to provide on top of Crunch are:
 ```scala
 
 object Examples {
+
   /** Outputs unique "words" in input along with the number of occurrences in the form "word:count" */
   def wordCount(lines: PCollection[String]) =
     lines.flatMap(_.split("\\s+"))
@@ -22,7 +23,9 @@ object Examples {
   def countryArtistPlays(messages: PCollection[TrackPlayedMessage]) =
     messages.map(msg => CPair.of(msg.getUserCountry, msg.getArtistName))
             .count()
-            .map(countryArtistPlays => new CountryArtistPlays(countryArtistPlays.first().first(), countryArtistPlays.first().second(), countryArtistPlays.second()))
+            .map(rec => new CountryArtistPlays(rec.first().first(),
+                                               rec.first().second(),
+                                               rec.second()))
 
   /** Sum the total plays for each country using CountryArtistPlays as a starting point */
   def sumPlaysByCountry(records: PCollection[CountryArtistPlays]) =
@@ -30,7 +33,6 @@ object Examples {
            .groupByKey()
            .foldValues(0L, _+_)
            .map(countryPlays => countryPlays.first() + ":" + countryPlays.second())
-
 }
 
 ```
