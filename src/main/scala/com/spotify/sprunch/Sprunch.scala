@@ -1,4 +1,4 @@
-package com.spotify.data.examples.scala
+package com.spotify.sprunch
 
 import org.apache.crunch.{Pair => CPair, _}
 import org.apache.crunch.types.avro.Avros
