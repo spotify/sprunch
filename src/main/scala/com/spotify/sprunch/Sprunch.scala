@@ -1,15 +1,15 @@
 package com.spotify.sprunch
 
-import org.apache.crunch.{Pair => CPair, _}
-import org.apache.crunch.types.avro.Avros
-import org.apache.crunch.types.{PTableType, PType}
-import java.lang.{Integer=>JInt, Long=>JLong, Iterable=>JIterable}
 import scala._
 import scala.Predef._
 import scala.reflect.ClassTag
 import scala.collection.JavaConverters._
-import org.apache.crunch.lib.SecondarySort
+import java.lang.{Integer=>JInt, Long=>JLong, Iterable=>JIterable}
 import org.apache.avro.specific.SpecificRecord
+import org.apache.crunch.{Pair => CPair, _}
+import org.apache.crunch.types.avro.Avros
+import org.apache.crunch.types.{PTableType, PType}
+import org.apache.crunch.lib.SecondarySort
 
 object Sprunch {
   object Upgrades {
