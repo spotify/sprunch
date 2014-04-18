@@ -37,6 +37,28 @@ object Examples {
 
 ```
 
+Operations and function naming
+-----
+
+Sprunch uses different names for the the standard Crunch operations it wraps, this is because the Scala compiler
+will not attempt to upgrade an object via an implicit if the method being called has the same name as one defined on
+the underlying class.
+
+Sprunch Operation | Crunch Equivalent
+------------------|------------------
+map               | parallelDo with MapFn
+flatMap           | parallelDo with DoFn
+mapToTable        | parallelDo with MapFn and PTable output
+extractKey        | by
+filterBy          | filter
+foldValues        | (subset of) combine with Aggregator
+
+Usage
+-----
+
+* Import Sprunch.Upgrades._ and Sprunch.Avro._ (or write your own implicit PTypes for another family).
+* Use new functions on PCollection, PTable and PGroupedTable types.
+
 Differences from Scrunch
 -----
 
