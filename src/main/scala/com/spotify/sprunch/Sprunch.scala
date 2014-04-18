@@ -4,12 +4,14 @@ import scala._
 import scala.Predef._
 import scala.reflect.ClassTag
 import scala.collection.JavaConverters._
-import java.lang.{Integer=>JInt, Long=>JLong, Iterable=>JIterable}
+import java.lang.{Integer=>JInt, Long=>JLong, Float=>JFloat, Double=>JDouble, Iterable=>JIterable, Boolean=>JBool}
 import org.apache.avro.specific.SpecificRecord
 import org.apache.crunch.{Pair => CPair, _}
-import org.apache.crunch.types.avro.Avros
+import org.apache.crunch.types.avro.{AvroType, Avros}
 import org.apache.crunch.types.{PTableType, PType}
 import org.apache.crunch.lib.SecondarySort
+import org.apache.avro.Schema
+import org.apache.crunch.types.DeepCopier.NoOpDeepCopier
 
 object Sprunch {
   object Upgrades {
@@ -20,13 +22,26 @@ object Sprunch {
   }
 
   object Avro {
-    implicit def records[T <: SpecificRecord](implicit evidence: ClassTag[T]): PType[T] = Avros.containers(evidence.runtimeClass).asInstanceOf[PType[T]]
-    implicit def ints: PType[JInt] = Avros.ints
-    implicit def longs: PType[JLong] = Avros.longs
+    private def avroType[T](schemaType: Schema.Type)(implicit evidence: ClassTag[T]) =
+      new AvroType[T](evidence.runtimeClass.asInstanceOf[Class[T]], Schema.create(schemaType), new NoOpDeepCopier[T]())
+
+    implicit def records[T <: SpecificRecord](implicit evidence: ClassTag[T]): PType[T] =
+      Avros.containers(evidence.runtimeClass).asInstanceOf[PType[T]]
+    implicit def javaInts: PType[JInt] = Avros.ints
+    implicit def scalaInts: PType[Int] = avroType[Int](Schema.Type.INT)
+    implicit def javaLongs: PType[JLong] = Avros.longs
+    implicit def scalaLongs: PType[Long] = avroType[Long](Schema.Type.LONG)
+    implicit def javaDoubles: PType[JDouble] = Avros.doubles
+    implicit def scalaDoubles: PType[Double] = avroType[Double](Schema.Type.DOUBLE)
+    implicit def javaFloat: PType[JFloat] = Avros.floats
+    implicit def scalaFloat: PType[Float] = avroType[Float](Schema.Type.FLOAT)
+    implicit def javaBool: PType[JBool] = Avros.booleans()
+    implicit def scalaBool: PType[Boolean] = avroType[Boolean](Schema.Type.BOOLEAN)
+
     implicit def strings: PType[String] = Avros.strings
-    implicit def pairs[T1, T2](implicit type1: PType[T1], type2: PType[T2]): PType[CPair[T1, T2]] = Avros.pairs(type1, type2)
-    implicit def collections[T](implicit ptype: PType[T]): PType[java.util.Collection[T]] = Avros.collections(ptype)
-    implicit def tableOf[K, V](implicit keyType: PType[K], valueType: PType[V]) = Avros.tableOf(keyType, valueType)
+    implicit def pairs[T1, T2](implicit pType1: PType[T1], pType2: PType[T2]): PType[CPair[T1, T2]] = Avros.pairs(pType1, pType2)
+    implicit def collections[T](implicit pType: PType[T]): PType[java.util.Collection[T]] = Avros.collections(pType)
+    implicit def tableOf[K, V](implicit keyType: PType[K], valueType: PType[V]): PTableType[K, V] = Avros.tableOf(keyType, valueType)
   }
 
   object Fns {
