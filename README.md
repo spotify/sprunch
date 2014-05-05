@@ -72,3 +72,14 @@ If you follow the big data world, you probably know that Crunch already has a Sc
   normal Crunch methods without the need for explicit conversions.
 * Sprunch does not have it's own versions of Pipeline or any of its implementations or dependent classes. This means the
   total functional code size of Sprunch is around 70 lines.
+
+
+Differences from Scalding
+-----
+
+If you follow the big data world, you probably know that Hadoop already has a Scala API called Scalding (built on Cascading)
+
+* Sprunch works with real types rather than tuples, giving you more compile-time safety and a programming environment
+  more like conventional functional programming with Scala.
+* Sprunch can run on other execution engines (such as Spark) because Crunch can.
+* Sprunch has excellent support for local testing because Crunch does.
