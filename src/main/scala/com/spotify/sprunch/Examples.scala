@@ -1,5 +1,8 @@
 package com.spotify.sprunch
 
+
+import scala.collection.JavaConverters._
+
 import org.apache.crunch.{PCollection, Pair=>CPair}
 import Sprunch.Upgrades._
 import Sprunch.Avro._
@@ -30,5 +33,9 @@ object Examples {
   /** Output all TrackPlayedMessages for which userCountry="SE" and duration > 30 seconds */
   def filterTrackPlayedMessages(message: PCollection[TrackPlayedMessage]) =
     message.filterBy(msg => msg.getUserCountry.equals("SE") && msg.getDurationMs > 30000)
+
+  /** Map-typed output example */
+  def mapTypedOutput(message: PCollection[TrackPlayedMessage]) =
+    message.map(m => Map("artist" -> m.getArtistName, "duration" -> m.getDurationMs.toString).asJava)
 
 }

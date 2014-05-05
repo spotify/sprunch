@@ -71,4 +71,14 @@ class ExamplesTest {
 
     Assert.assertEquals(expected, output.asScala.toSet)
   }
+
+  @Test
+  def testMapTypedOutput() {
+    val output = Examples.mapTypedOutput(
+      MemPipeline.typedCollectionOf(Avros.specifics(classOf[TrackPlayedMessage]),
+        new TrackPlayedMessage("trk", "Heretics", "UK", 10000))).materialize()
+
+    Assert.assertEquals(Map("artist"->"Heretics", "duration"->"10000").asJava, output.iterator().next())
+
+  }
 }

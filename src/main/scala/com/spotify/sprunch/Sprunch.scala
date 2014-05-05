@@ -5,6 +5,7 @@ import scala.Predef._
 import scala.reflect.ClassTag
 import scala.collection.JavaConverters._
 import java.lang.{Integer=>JInt, Long=>JLong, Float=>JFloat, Double=>JDouble, Iterable=>JIterable, Boolean=>JBool}
+import java.util.{Map=>JMap}
 import org.apache.avro.specific.SpecificRecord
 import org.apache.crunch.{Pair => CPair, _}
 import org.apache.crunch.types.avro.{AvroType, Avros}
@@ -12,6 +13,7 @@ import org.apache.crunch.types.{PTableType, PType}
 import org.apache.crunch.lib.SecondarySort
 import org.apache.avro.Schema
 import org.apache.crunch.types.DeepCopier.NoOpDeepCopier
+import java.util
 
 object Sprunch {
   object Upgrades {
@@ -40,6 +42,8 @@ object Sprunch {
 
     implicit def strings: PType[String] = Avros.strings
     implicit def pairs[T1, T2](implicit pType1: PType[T1], pType2: PType[T2]): PType[CPair[T1, T2]] = Avros.pairs(pType1, pType2)
+    implicit def tuple3s[T1, T2, T3](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3]) = Avros.triples(pType1, pType2, pType3)
+    implicit def maps[V](implicit pType: PType[V]): PType[JMap[String, V]] = Avros.maps(pType)
     implicit def collections[T](implicit pType: PType[T]): PType[java.util.Collection[T]] = Avros.collections(pType)
     implicit def tableOf[K, V](implicit keyType: PType[K], valueType: PType[V]): PTableType[K, V] = Avros.tableOf(keyType, valueType)
   }
