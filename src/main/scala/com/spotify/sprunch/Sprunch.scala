@@ -15,6 +15,35 @@ import org.apache.crunch.types.DeepCopier.NoOpDeepCopier
 
 object Sprunch {
 
+  /** Sprunch extensions for an underlying PCollection */
+  class SCollection[T](val underlying: PCollection[T]) {
+    /** 1-1 transformation between values */
+    def map[U](mapFn: T => U)(implicit pType: PType[U]) = underlying.parallelDo(new Fns.SMap(mapFn), pType)
+
+    /** 1-1 transformation to (key,value) pair resulting in a PTable */
+    def mapToTable[K, V](mapFn: T => (K, V))(implicit pTableType: PTableType[K, V]) =
+      underlying.parallelDo(new Fns.STableMap(mapFn), pTableType)
+
+    /** 1->[0...] transformation. The output will be traversed and records emitted for each item */
+    def flatMap[U](mapFn: T => TraversableOnce[U])(implicit pType: PType[U]) =
+      underlying.parallelDo(new Fns.SFlatMap(mapFn), pType)
+
+    /** Transform PCollection to PTable by extracting a key */
+    def extractKey[K](extractKeyFn: T => K)(implicit pType: PType[K]) =
+      underlying.by(new Fns.SMap(extractKeyFn), pType)
+
+    /** Filter rows in a PCollection by accepting only those satisfying the given predicate */
+    def filterBy(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
+  }
+
+
+  /** Sprunch extensions for an underlying PGroupedTable */
+  class SGroupedTable[K, V](val underlying: PGroupedTable[K, V]) {
+
+    /** Perform a foldLeft over the values in the grouped table, implemented efficiently as a combine/reduce combination */
+    def foldValues(initialValue: V, fn: (V, V) => V) = underlying.combineValues(new Fns.SFoldValues[K, V](initialValue, fn))
+  }
+
   /**
    * Implicit methods to wrap PCollection, PTable and PGroupedTable instances to add extra methods under certain conditions
    */
@@ -97,34 +126,5 @@ object Sprunch {
       override def process(input: CPair[K, JIterable[V]], emitter: Emitter[CPair[K, V]]) =
         emitter.emit(CPair.of(input.first(), input.second().asScala.foldLeft(initial)(fn)))
     }
-  }
-
-  /** Sprunch extensions for an underlying PCollection */
-  class SCollection[T](val underlying: PCollection[T]) {
-    /** 1-1 transformation between values */
-    def map[U](mapFn: T => U)(implicit pType: PType[U]) = underlying.parallelDo(new Fns.SMap(mapFn), pType)
-
-    /** 1-1 transformation to (key,value) pair resulting in a PTable */
-    def mapToTable[K, V](mapFn: T => (K, V))(implicit pTableType: PTableType[K, V]) =
-      underlying.parallelDo(new Fns.STableMap(mapFn), pTableType)
-
-    /** 1->[0...] transformation. The output will be traversed and records emitted for each item */
-    def flatMap[U](mapFn: T => TraversableOnce[U])(implicit pType: PType[U]) =
-      underlying.parallelDo(new Fns.SFlatMap(mapFn), pType)
-
-    /** Transform PCollection to PTable by extracting a key */
-    def extractKey[K](extractKeyFn: T => K)(implicit pType: PType[K]) =
-      underlying.by(new Fns.SMap(extractKeyFn), pType)
-
-    /** Filter rows in a PCollection by accepting only those satisfying the given predicate */
-    def filterBy(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
-  }
-
-
-  /** Sprunch extensions for an underlying PGroupedTable */
-  class SGroupedTable[K, V](val underlying: PGroupedTable[K, V]) {
-
-    /** Perform a foldLeft over the values in the grouped table, implemented efficiently as a combine/reduce combination */
-    def foldValues(initialValue: V, fn: (V, V) => V) = underlying.combineValues(new Fns.SFoldValues[K, V](initialValue, fn))
   }
 }
