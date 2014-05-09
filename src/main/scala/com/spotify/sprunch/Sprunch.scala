@@ -10,7 +10,6 @@ import org.apache.avro.specific.SpecificRecord
 import org.apache.crunch.{Pair => CPair, _}
 import org.apache.crunch.types.avro.{AvroType, Avros}
 import org.apache.crunch.types.{PTableType, PType}
-import org.apache.crunch.lib.SecondarySort
 import org.apache.avro.Schema
 import org.apache.crunch.types.DeepCopier.NoOpDeepCopier
 
@@ -62,10 +61,10 @@ object Sprunch {
    * Conversions between Crunch/Java and native Scala types
    */
    object TypeConversions {
-    /* Convert a Scala pair to a Crunch Pair */
+    /** Convert a Scala pair to a Crunch Pair */
     def toCPair[K, V](pair: (K, V)) = CPair.of(pair._1, pair._2)
 
-    /* Convert a Crunch pair to a Scala Pair */
+    /** Convert a Crunch pair to a Scala Pair */
     def toSPair[K, V](pair: CPair[K, V]) = (pair.first(), pair.second())
   }
 
@@ -73,27 +72,27 @@ object Sprunch {
    * Function wrappers to wrap lambda functions and named functions into Crunch ...Fn types.
    */
   object Fns {
-    /* Wrap simple function into MapFn */
+    /** Wrap simple function into MapFn */
     class SMap[T, U](fn: T=>U) extends MapFn[T, U] {
       override def map(input: T) = fn(input)
     }
 
-    /* Wrap Scala pair-valued function into a MapFn suitable for creating a PTable */
+    /** Wrap Scala pair-valued function into a MapFn suitable for creating a PTable */
     class STableMap[T, K, V](fn: T => (K, V)) extends MapFn[T, CPair[K, V]] {
       override def map(input: T) = TypeConversions.toCPair(fn(input))
     }
 
-    /* Wrap a traversable-valued function into a DoFn which emits everything in the traversable */
+    /** Wrap a traversable-valued function into a DoFn which emits everything in the traversable */
     class SFlatMap[T, U](fn: T=>TraversableOnce[U]) extends DoFn[T, U] {
       override def process(input: T, emitter: Emitter[U]) = fn(input).foreach(emitter.emit)
     }
 
-    /* Wrap a boolean-valued function into a FilterFn */
+    /** Wrap a boolean-valued function into a FilterFn */
     class SFilter[T](fn: T => Boolean) extends FilterFn[T] {
       override def accept(input: T) = fn(input)
     }
 
-    /* Convert an initial value and fold function into a CombineFn which will fold left over values */
+    /** Convert an initial value and fold function into a CombineFn which will fold left over values */
     class SFoldValues[K, V](initial: V, fn: (V, V) => V) extends CombineFn[K, V] {
       override def process(input: CPair[K, JIterable[V]], emitter: Emitter[CPair[K, V]]) =
         emitter.emit(CPair.of(input.first(), input.second().asScala.foldLeft(initial)(fn)))
