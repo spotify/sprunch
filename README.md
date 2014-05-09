@@ -12,27 +12,32 @@ The two features which Sprunch aims to provide on top of Crunch are:
 ```scala
 
 object Examples {
-
   /** Outputs unique "words" in input along with the number of occurrences in the form "word:count" */
   def wordCount(lines: PCollection[String]) =
     lines.flatMap(_.split("\\s+"))
          .count()
-         .map(wordCount => wordCount.first() + ":" + wordCount.second())
+         .map{case (word, count) => word + ":" + count}
 
   /** Count the number of plays for each distinct pair of userCountry and artistName */
   def countryArtistPlays(messages: PCollection[TrackPlayedMessage]) =
-    messages.map(msg => CPair.of(msg.getUserCountry, msg.getArtistName))
+    messages.map(msg => (msg.getUserCountry, msg.getArtistName))
             .count()
-            .map(rec => new CountryArtistPlays(rec.first().first(),
-                                               rec.first().second(),
-                                               rec.second()))
+            .map{case ((country, artist), plays) =>
+              new CountryArtistPlays(country, artist, plays)}
+
+
 
   /** Sum the total plays for each country using CountryArtistPlays as a starting point */
   def sumPlaysByCountry(records: PCollection[CountryArtistPlays]) =
     records.mapToTable(rec => (rec.getCountry, rec.getPlays))
            .groupByKey()
            .foldValues(0L, _+_)
-           .map(countryPlays => countryPlays.first() + ":" + countryPlays.second())
+           .map{case (country, plays) => country + ":" + plays}
+
+  /** Output all TrackPlayedMessages for which userCountry="SE" and duration > 30 seconds */
+  def filterTrackPlayedMessages(message: PCollection[TrackPlayedMessage]) =
+    message.filterBy(msg => msg.getUserCountry.equals("SE") && msg.getDurationMs > 30000)
+
 }
 
 ```
