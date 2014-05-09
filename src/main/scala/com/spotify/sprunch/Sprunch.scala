@@ -21,8 +21,6 @@ object Sprunch {
    */
   object Upgrades {
     implicit def upgrade[T](collection: PCollection[T]): SCollection[T] = new SCollection[T](collection)
-    implicit def upgrade[GK, SK, V](table: PTable[GK, CPair[SK, V]]):SecondarySortableTable[GK, SK, V]
-      = new SecondarySortableTable[GK, SK, V](table)
     implicit def upgrade[K, V](table: PGroupedTable[K, V]): SGroupedTable[K, V] = new SGroupedTable[K, V](table)
   }
 
@@ -100,12 +98,6 @@ object Sprunch {
       override def process(input: CPair[K, JIterable[V]], emitter: Emitter[CPair[K, V]]) =
         emitter.emit(CPair.of(input.first(), input.second().asScala.foldLeft(initial)(fn)))
     }
-
-    class SSecondarySortFn[GK, SK, V, T](fn: (GK, TraversableOnce[(SK, V)]) => T)
-          extends MapFn[CPair[GK, JIterable[CPair[SK, V]]], T] {
-      override def map(input: CPair[GK, JIterable[CPair[SK, V]]])
-        = fn(input.first(), input.second().asScala.map(TypeConversions.toSPair))
-    }
   }
 
   /** Sprunch extensions for an underlying PCollection */
@@ -129,17 +121,10 @@ object Sprunch {
     def filterBy(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
   }
 
-  /** Sprunch extensions for an underlying PTable in a format suitable for Secondary Sort */
-  class SecondarySortableTable[GroupKey, SortKey, Value](val underlying: PTable[GroupKey, CPair[SortKey, Value]]) {
-
-    /** Apply a Secondary Sort to the PTable using the given function to process and reduce the output */
-    def secondarySort[T](fn: (GroupKey, TraversableOnce[(SortKey, Value)]) => T)(implicit pType: PType[T]): PCollection[T] =
-      SecondarySort.sortAndApply(underlying, new Fns.SSecondarySortFn(fn), pType)
-  }
 
   /** Sprunch extensions for an underlying PGroupedTable */
   class SGroupedTable[K, V](val underlying: PGroupedTable[K, V]) {
-    
+
     /** Perform a foldLeft over the values in the grouped table, implemented efficiently as a combine/reduce combination */
     def foldValues(initialValue: V, fn: (V, V) => V) = underlying.combineValues(new Fns.SFoldValues[K, V](initialValue, fn))
   }
