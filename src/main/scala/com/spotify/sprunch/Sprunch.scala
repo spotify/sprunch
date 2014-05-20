@@ -36,6 +36,11 @@ object Sprunch {
     def filterBy(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
   }
 
+  /** Sprunch extensions for an underlying PCollection */
+  class STable[K, V](val underlying: PCollection[CPair[K, V]]) {
+    /** Allow expressing map on PTable as a binary function instead of a function of CPairs */
+    def map[U](fn: (K, V) => U)(implicit pType: PType[U]) = underlying.parallelDo(new Fns.SPairMap(fn), pType)
+  }
 
   /** Sprunch extensions for an underlying PGroupedTable */
   class SGroupedTable[K, V](val underlying: PGroupedTable[K, V]) {
@@ -49,7 +54,9 @@ object Sprunch {
    */
   object Upgrades {
     implicit def upgrade[T](collection: PCollection[T]): SCollection[T] = new SCollection[T](collection)
+    implicit def upgrade[K, V](table: PCollection[CPair[K, V]]): STable[K, V] = new STable[K, V](table)
     implicit def upgrade[K, V](table: PGroupedTable[K, V]): SGroupedTable[K, V] = new SGroupedTable[K, V](table)
+
   }
 
   /**
@@ -84,6 +91,21 @@ object Sprunch {
     implicit def maps[V](implicit pType: PType[V]): PType[JMap[String, V]] = Avros.maps(pType)
     implicit def collections[T](implicit pType: PType[T]): PType[java.util.Collection[T]] = Avros.collections(pType)
     implicit def tableOf[K, V](implicit keyType: PType[K], valueType: PType[V]): PTableType[K, V] = Avros.tableOf(keyType, valueType)
+
+    implicit def scalaPairs[T1, T2](implicit pType1: PType[T1], pType2: PType[T2]): PType[Pair[T1, T2]] =
+      Avros.derived(
+        classOf[Pair[T1,T2]],
+        new Fns.SMap[CPair[T1, T2], Pair[T1, T2]](TypeConversions.toSPair),
+        new Fns.SMap[Pair[T1, T2], CPair[T1, T2]](TypeConversions.toCPair),
+        pairs(pType1, pType2))
+
+    implicit def scalaMap[V](implicit pType: PType[V]): PType[Map[String, V]] =
+      Avros.derived(
+        classOf[Map[String, V]],
+        new Fns.SMap[JMap[String, V], Map[String, V]](_.asScala.toMap), // NOTE: This will copy the map, ie. _expensive_
+        new Fns.SMap[Map[String, V], JMap[String, V]](_.asJava),
+        maps(pType)
+      )
   }
 
   /**
@@ -104,6 +126,11 @@ object Sprunch {
     /** Wrap simple function into MapFn */
     class SMap[T, U](fn: T=>U) extends MapFn[T, U] {
       override def map(input: T) = fn(input)
+    }
+
+    /** Wrap Scala pair-parametered function into a MapFn accepting a CPair */
+    class SPairMap[K, V, U](fn: (K, V) => U) extends MapFn[CPair[K, V], U] {
+      override def map(input: CPair[K, V]): U = fn(input.first(), input.second())
     }
 
     /** Wrap Scala pair-valued function into a MapFn suitable for creating a PTable */
