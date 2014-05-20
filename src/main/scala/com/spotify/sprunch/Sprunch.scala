@@ -37,7 +37,7 @@ object Sprunch {
   }
 
   /** Sprunch extensions for an underlying PCollection */
-  class STable[K, V](val underlying: PTable[K, V]) {
+  class STable[K, V](val underlying: PCollection[CPair[K, V]]) {
     /** Allow expressing map on PTable as a binary function instead of a function of CPairs */
     def map[U](fn: (K, V) => U)(implicit pType: PType[U]) = underlying.parallelDo(new Fns.SPairMap(fn), pType)
   }
@@ -54,7 +54,7 @@ object Sprunch {
    */
   object Upgrades {
     implicit def upgrade[T](collection: PCollection[T]): SCollection[T] = new SCollection[T](collection)
-    implicit def upgrade[K, V](table: PTable[K, V]): STable[K, V] = new STable[K, V](table)
+    implicit def upgrade[K, V](table: PCollection[CPair[K, V]]): STable[K, V] = new STable[K, V](table)
     implicit def upgrade[K, V](table: PGroupedTable[K, V]): SGroupedTable[K, V] = new SGroupedTable[K, V](table)
 
   }

@@ -19,8 +19,6 @@ object Examples {
             .map{case ((country, artist), plays) =>
               new CountryArtistPlays(country, artist, plays)}
 
-
-
   /** Sum the total plays for each country using CountryArtistPlays as a starting point */
   def sumPlaysByCountry(records: PCollection[CountryArtistPlays]) =
     records.mapToTable(rec => (rec.getCountry, rec.getPlays))
