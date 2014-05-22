@@ -1,3 +1,5 @@
+Disclaimer: Sprunch is currently experimental software, and we make no guarantees about ongoing support and development.
+
 Sprunch
 =======
 
