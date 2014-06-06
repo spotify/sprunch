@@ -63,6 +63,21 @@ class SprunchTest {
   }
 
   @Test
+  def testScalaCollections() {
+    val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(), 1, 2)
+    val arrays = p.map(i => Array(i, i)).materialize().asScala.toList.map(_.toList)
+    Assert.assertEquals(Seq(List(1, 1), List(2, 2)), arrays)
+    val lists = p.map(i => List(i, i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(List(1, 1), List(2, 2)), lists)
+    val seqs = p.map(i => Seq(i, i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(Seq(1, 1), Seq(2, 2)), seqs)
+    val sets = p.map(i => Set[Int](i, i + i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(Set(1, 2), Set(2, 4)), sets)
+    val maps = p.map(i => Map[String, Int](i.toString -> i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(Map("1" -> 1), Map("2" -> 2)), maps)
+  }
+
+  @Test
   def testScalaTuples() {
     val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(), 1, 2)
     val pairs = p.map(i => (i.toString, i)).materialize().asScala.toList

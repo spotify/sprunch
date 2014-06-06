@@ -20,7 +20,7 @@ import scala.Predef._
 import scala.reflect.ClassTag
 import scala.collection.JavaConverters._
 import java.lang.{Integer=>JInt, Long=>JLong, Float=>JFloat, Double=>JDouble, Iterable=>JIterable, Boolean=>JBool}
-import java.util.{Map=>JMap}
+import java.util.{Arrays, Collection => JCollection, Map => JMap}
 import org.apache.avro.specific.SpecificRecord
 import org.apache.crunch.{Pair => CPair, Tuple3 => CTuple3, Tuple4 => CTuple4, TupleN => CTupleN, _}
 import org.apache.crunch.types.avro.{AvroType, Avros}
@@ -115,6 +115,34 @@ object Sprunch {
     implicit def maps[V](implicit pType: PType[V]): PType[JMap[String, V]] = Avros.maps(pType)
     implicit def collections[T](implicit pType: PType[T]): PType[java.util.Collection[T]] = Avros.collections(pType)
     implicit def tableOf[K, V](implicit keyType: PType[K], valueType: PType[V]): PTableType[K, V] = Avros.tableOf(keyType, valueType)
+
+    implicit def scalaArray[V](implicit pType: PType[V], ct: ClassTag[V]): PType[Array[V]] =
+      Avros.derived(
+        classOf[Array[V]],
+        new Fns.SMap[JCollection[V], Array[V]](_.asScala.toArray),
+        new Fns.SMap[Array[V], JCollection[V]](Arrays.asList(_: _*)),
+        collections(pType))
+
+    implicit def scalaList[V](implicit pType: PType[V]): PType[List[V]] =
+      Avros.derived(
+        classOf[List[V]],
+        new Fns.SMap[JCollection[V], List[V]](_.asScala.toList),
+        new Fns.SMap[List[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
+
+    implicit def scalaSeq[V](implicit pType: PType[V]): PType[Seq[V]] =
+      Avros.derived(
+        classOf[Seq[V]],
+        new Fns.SMap[JCollection[V], Seq[V]](_.asScala.toSeq),
+        new Fns.SMap[Seq[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
+
+    implicit def scalaSet[V](implicit pType: PType[V]): PType[Set[V]] =
+      Avros.derived(
+        classOf[Set[V]],
+        new Fns.SMap[JCollection[V], Set[V]](_.asScala.toSet),
+        new Fns.SMap[Set[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
 
     implicit def scalaMap[V](implicit pType: PType[V]): PType[Map[String, V]] =
       Avros.derived(
