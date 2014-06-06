@@ -28,6 +28,7 @@ import org.apache.crunch.types.{PTableType, PType}
 import org.apache.avro.Schema
 import org.apache.crunch.types.DeepCopier.NoOpDeepCopier
 import org.apache.crunch.fn.Aggregators.SimpleAggregator
+import org.apache.crunch.lib.join.{DefaultJoinStrategy, JoinType}
 import com.google.common.collect.ImmutableList
 
 object Sprunch {
@@ -57,9 +58,25 @@ object Sprunch {
   }
 
   /** Sprunch extensions for an underlying PCollection */
-  class STable[K, V](val underlying: PCollection[CPair[K, V]]) {
+  class STable[K, V](val underlying: PTable[K, V]) {
     /** Allow expressing map on PTable as a binary function instead of a function of CPairs */
     def map[U](fn: (K, V) => U)(implicit pType: PType[U]) = underlying.parallelDo(new Fns.SPairMap(fn), pType)
+
+    def join[W](that: PTable[K, W], numReducers: Int = -1) =
+      joinWith(that, JoinType.INNER_JOIN, numReducers)
+
+    def outerJoin[W](that: PTable[K, W], numReducers: Int = -1) =
+      joinWith(that, JoinType.FULL_OUTER_JOIN, numReducers)
+
+    def leftJoin[W](that: PTable[K, W], numReducers: Int = -1) =
+      joinWith(that, JoinType.LEFT_OUTER_JOIN, numReducers)
+
+    def rightJoin[W](that: PTable[K, W], numReducers: Int = -1) =
+      joinWith(that, JoinType.RIGHT_OUTER_JOIN, numReducers)
+
+    private def joinWith[W](that: PTable[K, W], mode: JoinType, numReducers: Int = -1): PTable[K, CPair[V, W]] = {
+      new DefaultJoinStrategy[K, V, W](numReducers).join(underlying, that, mode)
+    }
   }
 
   /** Sprunch extensions for an underlying PGroupedTable */
@@ -78,7 +95,7 @@ object Sprunch {
    */
   object Upgrades {
     implicit def upgrade[T](collection: PCollection[T]): SCollection[T] = new SCollection[T](collection)
-    implicit def upgrade[K, V](table: PCollection[CPair[K, V]]): STable[K, V] = new STable[K, V](table)
+    implicit def upgrade[K, V](table: PTable[K, V]): STable[K, V] = new STable[K, V](table)
     implicit def upgrade[K, V](table: PGroupedTable[K, V]): SGroupedTable[K, V] = new SGroupedTable[K, V](table)
 
   }

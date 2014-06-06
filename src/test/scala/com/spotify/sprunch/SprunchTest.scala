@@ -20,6 +20,7 @@ import org.junit.{Assert, Test}
 import org.apache.crunch.impl.mem.MemPipeline
 import org.apache.crunch.types.avro.Avros
 import org.apache.crunch.{Pair => CPair, PCollection, PTable}
+import org.apache.crunch.lib.join.JoinType
 import scala.collection.JavaConverters._
 
 class SprunchTest {
@@ -54,11 +55,37 @@ class SprunchTest {
     def pair(k: String, v: Int) = CPair.of[String, Integer](k, v)
     val p: PTable[String, Integer] = MemPipeline.typedTableOf(
       Avros.tableOf(Avros.strings(), Avros.ints()),
-      Seq(pair("a", 1), pair("a", 2), pair("a", 3), pair("b", 10), pair("b", 20), pair("c", 100)).asJava)
+    Seq(pair("a", 1), pair("a", 2), pair("a", 3), pair("b", 10), pair("b", 20), pair("c", 100)).asJava)
     val reduced = p.groupByKey().reduceValues(_ + _).materialize().asScala.toList
     Assert.assertEquals(Seq(pair("a", 6), pair("b", 30), pair("c", 100)), reduced)
     val folded = p.groupByKey().foldValues(100)(_ + _).materialize().asScala.toList
     Assert.assertEquals(Seq(pair("a", 106), pair("b", 130), pair("c", 200)), folded)
+  }
+
+  @Test
+  def testSTableJoins() {
+    def pair(k: String, v: Int) = CPair.of[String, Integer](k, v)
+    val p1: PTable[String, Integer] = MemPipeline.typedTableOf(
+      Avros.tableOf(Avros.strings(), Avros.ints()),
+      Seq(pair("a", 1), pair("a", 2), pair("b", 10)).asJava)
+
+    val p2: PTable[String, Integer] = MemPipeline.typedTableOf(
+      Avros.tableOf(Avros.strings(), Avros.ints()),
+      Seq(pair("a", 10), pair("a", 20), pair("c", 20)).asJava)
+
+    def p2t(p: CPair[String, CPair[Integer, Integer]]) = (p.first(), p.second().first(), p.second().second())
+
+    val j1 = p1.join(p2).materialize().asScala.toList.map(p2t)
+    Assert.assertEquals(Seq(("a", 1, 10), ("a", 2, 10), ("a", 1, 20), ("a", 2, 20)), j1)
+
+    val j2 = p1.leftJoin(p2).materialize().asScala.toList.map(p2t)
+    Assert.assertEquals(Seq(("a", 1, 10), ("a", 2, 10), ("a", 1, 20), ("a", 2, 20), ("b", 10, null)), j2)
+
+    val j3 = p1.rightJoin(p2).materialize().asScala.toList.map(p2t)
+    Assert.assertEquals(Seq(("a", 1, 10), ("a", 2, 10), ("a", 1, 20), ("a", 2, 20), ("c", null, 20)), j3)
+
+    val j4 = p1.outerJoin(p2).materialize().asScala.toList.map(p2t)
+    Assert.assertEquals(Seq(("a", 1, 10), ("a", 2, 10), ("a", 1, 20), ("a", 2, 20), ("b", 10, null), ("c", null, 20)), j4)
   }
 
   @Test
