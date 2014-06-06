@@ -27,6 +27,8 @@ import org.apache.crunch.types.avro.{AvroType, Avros}
 import org.apache.crunch.types.{PTableType, PType}
 import org.apache.avro.Schema
 import org.apache.crunch.types.DeepCopier.NoOpDeepCopier
+import org.apache.crunch.fn.Aggregators.SimpleAggregator
+import com.google.common.collect.ImmutableList
 
 object Sprunch {
 
@@ -63,8 +65,12 @@ object Sprunch {
   /** Sprunch extensions for an underlying PGroupedTable */
   class SGroupedTable[K, V](val underlying: PGroupedTable[K, V]) {
 
-    /** Perform a foldLeft over the values in the grouped table, implemented efficiently as a combine/reduce combination */
-    def foldValues(initialValue: V, fn: (V, V) => V) = underlying.combineValues(new Fns.SFoldValues[K, V](initialValue, fn))
+    /** Perform a reduce over the values in the grouped table, implemented efficiently as a combine/reduce combination */
+    def reduceValues(fn: (V, V) => V) = underlying.combineValues(new Fns.SReduceValues(fn))
+
+    /** Perform a foldLeft over the values in the grouped table with an initial value */
+    def foldValues[U](z: U)(fn: (U, V) => U)(implicit pType: PType[U]) =
+      underlying.mapValues(new Fns.SFoldValues(z, fn), pType)
   }
 
   /**
@@ -306,10 +312,25 @@ object Sprunch {
       override def accept(input: T) = fn(input)
     }
 
-    /** Convert an initial value and fold function into a CombineFn which will fold left over values */
-    class SFoldValues[K, V](initial: V, fn: (V, V) => V) extends CombineFn[K, V] {
-      override def process(input: CPair[K, JIterable[V]], emitter: Emitter[CPair[K, V]]) =
-        emitter.emit(CPair.of(input.first(), input.second().asScala.foldLeft(initial)(fn)))
+    /** Convert a reduce function into a CombineFn which will reduce over values */
+    class SReduceValues[V](fn: (V, V) => V) extends SimpleAggregator[V] {
+      var init: Boolean = false
+      var value: V = null.asInstanceOf[V]
+      override def reset() { init = false }
+      override def update(v: V) {
+        value = if (init) {
+          fn(value, v)
+        } else {
+          init = true
+          v
+        }
+      }
+      override def results() = ImmutableList.of(value)
+    }
+
+    /** Convert an initial value and fold function into a MapFn which will fold over values */
+    class SFoldValues[V, U](z: U, fn: (U, V) => U) extends MapFn[JIterable[V], U] {
+      override def map(input: JIterable[V]) = input.asScala.foldLeft(z)(fn)
     }
   }
 }
