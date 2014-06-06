@@ -50,6 +50,18 @@ class SprunchTest {
   }
 
   @Test
+  def testSGroupedTable() {
+    def pair(k: String, v: Int) = CPair.of[String, Integer](k, v)
+    val p: PTable[String, Integer] = MemPipeline.typedTableOf(
+      Avros.tableOf(Avros.strings(), Avros.ints()),
+      Seq(pair("a", 1), pair("a", 2), pair("a", 3), pair("b", 10), pair("b", 20), pair("c", 100)).asJava)
+    val reduced = p.groupByKey().reduceValues(_ + _).materialize().asScala.toList
+    Assert.assertEquals(Seq(pair("a", 6), pair("b", 30), pair("c", 100)), reduced)
+    val folded = p.groupByKey().foldValues(100)(_ + _).materialize().asScala.toList
+    Assert.assertEquals(Seq(pair("a", 106), pair("b", 130), pair("c", 200)), folded)
+  }
+
+  @Test
   def testScalaPrimitives() {
     val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(),1,2,3)
     val ints = p.map(i => i.toInt).materialize().asScala.toList
