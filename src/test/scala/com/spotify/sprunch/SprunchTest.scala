@@ -19,10 +19,36 @@ import Sprunch.Avro._
 import org.junit.{Assert, Test}
 import org.apache.crunch.impl.mem.MemPipeline
 import org.apache.crunch.types.avro.Avros
-import org.apache.crunch.PCollection
+import org.apache.crunch.{Pair => CPair, PCollection, PTable}
 import scala.collection.JavaConverters._
 
 class SprunchTest {
+  @Test
+  def testSCollection() {
+    val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(),1,2,3)
+    val strs = p.map(i => i.toString).materialize().asScala.toList
+    Assert.assertEquals(Seq("1", "2", "3"), strs)
+    val pairs = p.mapToTable(i => (i, i.toString)).materialize().asScala.toList
+    Assert.assertEquals(Seq(CPair.of(1, "1"), CPair.of(2, "2"), CPair.of(3, "3")), pairs)
+    val flatMapped = p.flatMap(i => List(i, i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(1, 1, 2, 2, 3, 3), flatMapped)
+    val keyed = p.extractKey(_.toString).materialize().asScala.toList
+    Assert.assertEquals(Seq(CPair.of("1", 1), CPair.of("2", 2), CPair.of("3", 3)), keyed)
+    val filtered = p.filterBy(_ % 2 != 0).materialize().asScala.toList
+    Assert.assertEquals(Seq(1, 3), filtered)
+    val grouped = p.groupBy(_ % 2).materialize().asScala.toList.map(p => (p.first(), p.second().asScala.toList))
+    Assert.assertEquals(Seq((0, Seq(2)), (1, Seq(1, 3))), grouped)
+  }
+
+  @Test
+  def testSTable() {
+    val p: PTable[Integer, String] = MemPipeline.typedTableOf(
+      Avros.tableOf(Avros.ints(), Avros.strings()),
+      Seq(CPair.of[Integer, String](1, "one"), CPair.of[Integer, String](2, "two")).asJava)
+    val strs = p.map((i, s) => "%d -> %s".format(i, s)).materialize().asScala.toList
+    Assert.assertEquals(Seq("1 -> one", "2 -> two"), strs)
+  }
+
   @Test
   def testScalaPrimitives() {
     val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(),1,2,3)
