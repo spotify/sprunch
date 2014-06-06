@@ -19,6 +19,7 @@ import scala._
 import scala.Predef._
 import scala.reflect.ClassTag
 import scala.collection.JavaConverters._
+import scala.collection.mutable
 import java.lang.{Integer=>JInt, Long=>JLong, Float=>JFloat, Double=>JDouble, Iterable=>JIterable, Boolean=>JBool}
 import java.util.{Arrays, Collection => JCollection, Map => JMap}
 import org.apache.avro.specific.SpecificRecord
@@ -133,13 +134,7 @@ object Sprunch {
     implicit def collections[T](implicit pType: PType[T]): PType[java.util.Collection[T]] = Avros.collections(pType)
     implicit def tableOf[K, V](implicit keyType: PType[K], valueType: PType[V]): PTableType[K, V] = Avros.tableOf(keyType, valueType)
 
-    implicit def scalaArray[V](implicit pType: PType[V], ct: ClassTag[V]): PType[Array[V]] =
-      Avros.derived(
-        classOf[Array[V]],
-        new Fns.SMap[JCollection[V], Array[V]](_.asScala.toArray),
-        new Fns.SMap[Array[V], JCollection[V]](Arrays.asList(_: _*)),
-        collections(pType))
-
+    // Scala immutable collections
     implicit def scalaList[V](implicit pType: PType[V]): PType[List[V]] =
       Avros.derived(
         classOf[List[V]],
@@ -166,6 +161,35 @@ object Sprunch {
         classOf[Map[String, V]],
         new Fns.SMap[JMap[String, V], Map[String, V]](_.asScala.toMap), // NOTE: This will copy the map, ie. _expensive_
         new Fns.SMap[Map[String, V], JMap[String, V]](_.asJava),
+        maps(pType))
+
+    // Scala mutable collections
+    implicit def scalaArray[V](implicit pType: PType[V], ct: ClassTag[V]): PType[Array[V]] =
+      Avros.derived(
+        classOf[Array[V]],
+        new Fns.SMap[JCollection[V], Array[V]](_.asScala.toArray),
+        new Fns.SMap[Array[V], JCollection[V]](Arrays.asList(_: _*)),
+        collections(pType))
+
+    implicit def scalaBuffer[V](implicit pType: PType[V]): PType[mutable.Buffer[V]] =
+      Avros.derived(
+        classOf[mutable.Buffer[V]],
+        new Fns.SMap[JCollection[V], mutable.Buffer[V]](_.asScala.foldLeft(mutable.Buffer[V]())(_ += _)),
+        new Fns.SMap[mutable.Buffer[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
+
+    implicit def scalaMutableSet[V](implicit pType: PType[V]): PType[mutable.Set[V]] =
+      Avros.derived(
+        classOf[mutable.Set[V]],
+        new Fns.SMap[JCollection[V], mutable.Set[V]](_.asScala.foldLeft(mutable.Set[V]())(_ += _)),
+        new Fns.SMap[mutable.Set[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
+
+    implicit def scalaMutableMap[V](implicit pType: PType[V]): PType[mutable.Map[String, V]] =
+      Avros.derived(
+        classOf[mutable.Map[String, V]],
+        new Fns.SMap[JMap[String, V], mutable.Map[String, V]](_.asScala),
+        new Fns.SMap[mutable.Map[String, V], JMap[String, V]](_.asJava),
         maps(pType))
 
     // Scala tuples

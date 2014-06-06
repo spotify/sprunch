@@ -22,6 +22,9 @@ import org.apache.crunch.types.avro.Avros
 import org.apache.crunch.{Pair => CPair, PCollection, PTable}
 import org.apache.crunch.lib.join.JoinType
 import scala.collection.JavaConverters._
+import scala.collection.mutable
+import org.apache.crunch.types.PType
+import scala.collection.generic.Growable
 
 class SprunchTest {
   @Test
@@ -102,10 +105,8 @@ class SprunchTest {
   }
 
   @Test
-  def testScalaCollections() {
+  def testScalaImmutableCollections() {
     val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(), 1, 2)
-    val arrays = p.map(i => Array(i, i)).materialize().asScala.toList.map(_.toList)
-    Assert.assertEquals(Seq(List(1, 1), List(2, 2)), arrays)
     val lists = p.map(i => List(i, i)).materialize().asScala.toList
     Assert.assertEquals(Seq(List(1, 1), List(2, 2)), lists)
     val seqs = p.map(i => Seq(i, i)).materialize().asScala.toList
@@ -114,6 +115,42 @@ class SprunchTest {
     Assert.assertEquals(Seq(Set(1, 2), Set(2, 4)), sets)
     val maps = p.map(i => Map[String, Int](i.toString -> i)).materialize().asScala.toList
     Assert.assertEquals(Seq(Map("1" -> 1), Map("2" -> 2)), maps)
+  }
+
+  @Test
+  def testScalaMutableCollections() {
+    val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(), 1, 2)
+    val arrays = p.map(i => Array(i, i)).materialize().asScala.toList.map(_.toList)
+    Assert.assertEquals(Seq(List(1, 1), List(2, 2)), arrays)
+    val buffers = p.map(i => mutable.Buffer(i, i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(mutable.Buffer(1, 1), mutable.Buffer(2, 2)), buffers)
+    val sets = p.map(i => mutable.Set[Int](i, i + i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(mutable.Set(1, 2), mutable.Set(2, 4)), sets)
+    val maps = p.map(i => mutable.Map[String, Int](i.toString -> i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(mutable.Map("1" -> 1), mutable.Map("2" -> 2)), maps)
+
+    // verify that mutable collections are actually mutable in foldValues
+    def headVal[K, V](p: PTable[K, V]) = p.materialize().asScala.toList.head.second()
+
+    val zArray = Array[Integer](0, 0)
+    val fArray= headVal(p.map(i => Array(i, i)).groupBy(_ => 0).foldValues(zArray)((z, a) => { z(0) += a(0); z(1) += a(1); z }))
+    Assert.assertSame(zArray, fArray)
+    Assert.assertEquals(Seq(3, 3), fArray.toList)
+
+    val zBuffer = mutable.Buffer[Integer]()
+    val fBuffer = headVal(p.map(i => mutable.Buffer(i, i)).groupBy(_ => 0).foldValues(zBuffer)(_ ++= _))
+    Assert.assertSame(zBuffer, fBuffer)
+    Assert.assertEquals(mutable.Buffer(1, 1, 2, 2), fBuffer)
+
+    val zSet = mutable.Set[Int]()
+    val fSet = headVal(p.map(i => mutable.Set[Int](i, i + i)).groupBy(_ => 0).foldValues(zSet)(_ ++= _))
+    Assert.assertSame(zSet, fSet)
+    Assert.assertEquals(mutable.Set(1, 2, 4), fSet)
+
+    val zMap = mutable.Map[String, Int]()
+    val fMap = headVal(p.map(i => mutable.Map[String, Int](i.toString -> i)).groupBy(_ => 0).foldValues(zMap)(_ ++= _))
+    Assert.assertSame(zMap, fMap)
+    Assert.assertEquals(mutable.Map("1" -> 1, "2" -> 2), fMap)
   }
 
   @Test
