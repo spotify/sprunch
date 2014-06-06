@@ -49,6 +49,9 @@ object Sprunch {
 
     /** Filter rows in a PCollection by accepting only those satisfying the given predicate */
     def filterBy(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
+
+    /** Aliases */
+    def groupBy[K](fn: T => K)(implicit pType: PType[K]) = extractKey(fn).groupByKey()
   }
 
   /** Sprunch extensions for an underlying PCollection */
