@@ -383,17 +383,9 @@ object Sprunch {
 
     /** Convert a reduce function into a CombineFn which will reduce over values */
     class SReduceValues[V](fn: (V, V) => V) extends SimpleAggregator[V] {
-      var init: Boolean = false
       var value: V = null.asInstanceOf[V]
-      override def reset() { init = false }
-      override def update(v: V) {
-        value = if (init) {
-          fn(value, v)
-        } else {
-          init = true
-          v
-        }
-      }
+      override def reset() { value = null.asInstanceOf[V] }
+      override def update(v: V) { value = if (value != null) fn(value, v) else v }
       override def results() = ImmutableList.of(value)
     }
 
