@@ -48,14 +48,14 @@ object Sprunch {
       underlying.parallelDo(new Fns.SFlatMap(mapFn), pType)
 
     /** Transform PCollection to PTable by extracting a key */
-    def extractKey[K](extractKeyFn: T => K)(implicit pType: PType[K]) =
+    def keyBy[K](extractKeyFn: T => K)(implicit pType: PType[K]) =
       underlying.by(new Fns.SMap(extractKeyFn), pType)
 
     /** Filter rows in a PCollection by accepting only those satisfying the given predicate */
     def filterBy(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
 
     /** Aliases */
-    def groupBy[K](fn: T => K)(implicit pType: PType[K]) = extractKey(fn).groupByKey()
+    def groupBy[K](fn: T => K)(implicit pType: PType[K]) = keyBy(fn).groupByKey()
   }
 
   /** Sprunch extensions for an underlying PCollection */
