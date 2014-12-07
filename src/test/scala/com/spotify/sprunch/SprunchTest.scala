@@ -25,14 +25,27 @@ import scala.collection.JavaConverters._
 class SprunchTest {
   @Test
   def testScalaPrimitives() {
-    val p:PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(),1,2,3)
-    val ints = p.map(i => i.intValue()).materialize().asScala.toList
+    val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(),1,2,3)
+    val ints = p.map(i => i.toInt).materialize().asScala.toList
     Assert.assertEquals(Seq(1,2,3), ints)
-    val longs = p.map(i => i.longValue()).materialize().asScala.toList
+    val longs = p.map(i => i.toLong).materialize().asScala.toList
     Assert.assertEquals(Seq(1L,2L,3L), longs)
-    val floats = p.map(i => i.floatValue()).materialize().asScala.toList
+    val floats = p.map(i => i.toFloat).materialize().asScala.toList
     Assert.assertEquals(Seq(1f,2f,3f), floats)
-    val doubles = p.map(i => i.doubleValue()).materialize().asScala.toList
+    val doubles = p.map(i => i.toDouble).materialize().asScala.toList
     Assert.assertEquals(Seq(1d,2d,3d), doubles)
+  }
+
+  @Test
+  def testScalaTuples() {
+    val p: PCollection[Integer] = MemPipeline.typedCollectionOf(Avros.ints(), 1, 2)
+    val pairs = p.map(i => (i.toString, i)).materialize().asScala.toList
+    Assert.assertEquals(Seq(("1", 1), ("2", 2)), pairs)
+    val triples = p.map(i => (i.toString, i, i.toLong)).materialize().asScala.toList
+    Assert.assertEquals(Seq(("1", 1, 1L), ("2", 2, 2L)), triples)
+    val quads = p.map(i => (i.toString, i, i.toLong, i.toFloat)).materialize().asScala.toList
+    Assert.assertEquals(Seq(("1", 1, 1L, 1f), ("2", 2, 2L, 2f)), quads)
+    val tuple5s = p.map(i => (i.toString, i, i.toLong, i.toFloat, i.toDouble)).materialize().asScala.toList
+    Assert.assertEquals(Seq(("1", 1, 1L, 1f, 1d), ("2", 2, 2L, 2f, 2d)), tuple5s)
   }
 }
