@@ -38,7 +38,7 @@ object Examples {
   def sumPlaysByCountry(records: PCollection[CountryArtistPlays]) =
     records.mapToTable(rec => (rec.getCountry, rec.getPlays))
            .groupByKey()
-           .foldValues(0L, _+_)
+           .foldValues(0L)(_+_)
            .map{case (country, plays) => country + ":" + plays}
 
   /** Output all TrackPlayedMessages for which userCountry="SE" and duration > 30 seconds */

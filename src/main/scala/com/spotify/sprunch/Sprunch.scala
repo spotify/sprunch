@@ -19,14 +19,18 @@ import scala._
 import scala.Predef._
 import scala.reflect.ClassTag
 import scala.collection.JavaConverters._
+import scala.collection.mutable
 import java.lang.{Integer=>JInt, Long=>JLong, Float=>JFloat, Double=>JDouble, Iterable=>JIterable, Boolean=>JBool}
-import java.util.{Map=>JMap}
+import java.util.{Arrays, Collection => JCollection, Map => JMap}
 import org.apache.avro.specific.SpecificRecord
-import org.apache.crunch.{Pair => CPair, _}
+import org.apache.crunch.{Pair => CPair, Tuple3 => CTuple3, Tuple4 => CTuple4, TupleN => CTupleN, _}
 import org.apache.crunch.types.avro.{AvroType, Avros}
 import org.apache.crunch.types.{PTableType, PType}
 import org.apache.avro.Schema
 import org.apache.crunch.types.DeepCopier.NoOpDeepCopier
+import org.apache.crunch.fn.Aggregators.SimpleAggregator
+import org.apache.crunch.lib.join.{DefaultJoinStrategy, JoinType}
+import com.google.common.collect.ImmutableList
 
 object Sprunch {
 
@@ -44,24 +48,47 @@ object Sprunch {
       underlying.parallelDo(new Fns.SFlatMap(mapFn), pType)
 
     /** Transform PCollection to PTable by extracting a key */
-    def extractKey[K](extractKeyFn: T => K)(implicit pType: PType[K]) =
+    def keyBy[K](extractKeyFn: T => K)(implicit pType: PType[K]) =
       underlying.by(new Fns.SMap(extractKeyFn), pType)
 
     /** Filter rows in a PCollection by accepting only those satisfying the given predicate */
     def filterBy(acceptFn: T => Boolean) = underlying.filter(new Fns.SFilter(acceptFn))
+
+    /** Aliases */
+    def groupBy[K](fn: T => K)(implicit pType: PType[K]) = keyBy(fn).groupByKey()
   }
 
   /** Sprunch extensions for an underlying PCollection */
-  class STable[K, V](val underlying: PCollection[CPair[K, V]]) {
+  class STable[K, V](val underlying: PTable[K, V]) {
     /** Allow expressing map on PTable as a binary function instead of a function of CPairs */
     def map[U](fn: (K, V) => U)(implicit pType: PType[U]) = underlying.parallelDo(new Fns.SPairMap(fn), pType)
+
+    def join[W](that: PTable[K, W], numReducers: Int = -1) =
+      joinWith(that, JoinType.INNER_JOIN, numReducers)
+
+    def outerJoin[W](that: PTable[K, W], numReducers: Int = -1) =
+      joinWith(that, JoinType.FULL_OUTER_JOIN, numReducers)
+
+    def leftJoin[W](that: PTable[K, W], numReducers: Int = -1) =
+      joinWith(that, JoinType.LEFT_OUTER_JOIN, numReducers)
+
+    def rightJoin[W](that: PTable[K, W], numReducers: Int = -1) =
+      joinWith(that, JoinType.RIGHT_OUTER_JOIN, numReducers)
+
+    private def joinWith[W](that: PTable[K, W], mode: JoinType, numReducers: Int = -1): PTable[K, CPair[V, W]] = {
+      new DefaultJoinStrategy[K, V, W](numReducers).join(underlying, that, mode)
+    }
   }
 
   /** Sprunch extensions for an underlying PGroupedTable */
   class SGroupedTable[K, V](val underlying: PGroupedTable[K, V]) {
 
-    /** Perform a foldLeft over the values in the grouped table, implemented efficiently as a combine/reduce combination */
-    def foldValues(initialValue: V, fn: (V, V) => V) = underlying.combineValues(new Fns.SFoldValues[K, V](initialValue, fn))
+    /** Perform a reduce over the values in the grouped table, implemented efficiently as a combine/reduce combination */
+    def reduceValues(fn: (V, V) => V) = underlying.combineValues(new Fns.SReduceValues(fn))
+
+    /** Perform a foldLeft over the values in the grouped table with an initial value */
+    def foldValues[U](z: U)(fn: (U, V) => U)(implicit pType: PType[U]) =
+      underlying.mapValues(new Fns.SFoldValues(z, fn), pType)
   }
 
   /**
@@ -69,7 +96,7 @@ object Sprunch {
    */
   object Upgrades {
     implicit def upgrade[T](collection: PCollection[T]): SCollection[T] = new SCollection[T](collection)
-    implicit def upgrade[K, V](table: PCollection[CPair[K, V]]): STable[K, V] = new STable[K, V](table)
+    implicit def upgrade[K, V](table: PTable[K, V]): STable[K, V] = new STable[K, V](table)
     implicit def upgrade[K, V](table: PGroupedTable[K, V]): SGroupedTable[K, V] = new SGroupedTable[K, V](table)
 
   }
@@ -107,20 +134,211 @@ object Sprunch {
     implicit def collections[T](implicit pType: PType[T]): PType[java.util.Collection[T]] = Avros.collections(pType)
     implicit def tableOf[K, V](implicit keyType: PType[K], valueType: PType[V]): PTableType[K, V] = Avros.tableOf(keyType, valueType)
 
-    implicit def scalaPairs[T1, T2](implicit pType1: PType[T1], pType2: PType[T2]): PType[Pair[T1, T2]] =
+    // Scala immutable collections
+    implicit def scalaList[V](implicit pType: PType[V]): PType[List[V]] =
       Avros.derived(
-        classOf[Pair[T1,T2]],
-        new Fns.SMap[CPair[T1, T2], Pair[T1, T2]](TypeConversions.toSPair),
-        new Fns.SMap[Pair[T1, T2], CPair[T1, T2]](TypeConversions.toCPair),
-        pairs(pType1, pType2))
+        classOf[List[V]],
+        new Fns.SMap[JCollection[V], List[V]](_.asScala.toList),
+        new Fns.SMap[List[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
+
+    implicit def scalaSeq[V](implicit pType: PType[V]): PType[Seq[V]] =
+      Avros.derived(
+        classOf[Seq[V]],
+        new Fns.SMap[JCollection[V], Seq[V]](_.asScala.toSeq),
+        new Fns.SMap[Seq[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
+
+    implicit def scalaSet[V](implicit pType: PType[V]): PType[Set[V]] =
+      Avros.derived(
+        classOf[Set[V]],
+        new Fns.SMap[JCollection[V], Set[V]](_.asScala.toSet),
+        new Fns.SMap[Set[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
 
     implicit def scalaMap[V](implicit pType: PType[V]): PType[Map[String, V]] =
       Avros.derived(
         classOf[Map[String, V]],
         new Fns.SMap[JMap[String, V], Map[String, V]](_.asScala.toMap), // NOTE: This will copy the map, ie. _expensive_
         new Fns.SMap[Map[String, V], JMap[String, V]](_.asJava),
-        maps(pType)
-      )
+        maps(pType))
+
+    // Scala mutable collections
+    implicit def scalaArray[V](implicit pType: PType[V], ct: ClassTag[V]): PType[Array[V]] =
+      Avros.derived(
+        classOf[Array[V]],
+        new Fns.SMap[JCollection[V], Array[V]](_.asScala.toArray),
+        new Fns.SMap[Array[V], JCollection[V]](Arrays.asList(_: _*)),
+        collections(pType))
+
+    implicit def scalaBuffer[V](implicit pType: PType[V]): PType[mutable.Buffer[V]] =
+      Avros.derived(
+        classOf[mutable.Buffer[V]],
+        new Fns.SMap[JCollection[V], mutable.Buffer[V]](_.asScala.foldLeft(mutable.Buffer[V]())(_ += _)),
+        new Fns.SMap[mutable.Buffer[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
+
+    implicit def scalaMutableSet[V](implicit pType: PType[V]): PType[mutable.Set[V]] =
+      Avros.derived(
+        classOf[mutable.Set[V]],
+        new Fns.SMap[JCollection[V], mutable.Set[V]](_.asScala.foldLeft(mutable.Set[V]())(_ += _)),
+        new Fns.SMap[mutable.Set[V], JCollection[V]](_.asJavaCollection),
+        collections(pType))
+
+    implicit def scalaMutableMap[V](implicit pType: PType[V]): PType[mutable.Map[String, V]] =
+      Avros.derived(
+        classOf[mutable.Map[String, V]],
+        new Fns.SMap[JMap[String, V], mutable.Map[String, V]](_.asScala),
+        new Fns.SMap[mutable.Map[String, V], JMap[String, V]](_.asJava),
+        maps(pType))
+
+    // Scala tuples
+    implicit def scalaPairs[T1, T2](implicit pType1: PType[T1], pType2: PType[T2]): PType[Pair[T1, T2]] =
+      Avros.derived(
+        classOf[Pair[T1, T2]],
+        new Fns.SMap[CPair[T1, T2], Pair[T1, T2]](TypeConversions.toSPair),
+        new Fns.SMap[Pair[T1, T2], CPair[T1, T2]](TypeConversions.toCPair),
+        pairs(pType1, pType2))
+
+    implicit def scalaTuple3[T1, T2, T3](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3]): PType[(T1, T2, T3)] =
+      Avros.derived(
+        classOf[(T1, T2, T3)],
+        new Fns.SMap[CTuple3[T1, T2, T3], (T1, T2, T3)](c => (c.first(), c.second(), c.third())),
+        new Fns.SMap[(T1, T2, T3), CTuple3[T1, T2, T3]](s => CTuple3.of(s._1, s._2, s._3)),
+        Avros.triples(pType1, pType2, pType3))
+
+    implicit def scalaTuple4[T1, T2, T3, T4](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4]): PType[(T1, T2, T3, T4)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4)],
+        new Fns.SMap[CTuple4[T1, T2, T3, T4], (T1, T2, T3, T4)](c => (c.first(), c.second(), c.third(), c.fourth())),
+        new Fns.SMap[(T1, T2, T3, T4), CTuple4[T1, T2, T3, T4]](s => CTuple4.of(s._1, s._2, s._3, s._4)),
+        Avros.quads(pType1, pType2, pType3, pType4))
+
+    implicit def scalaTuple5[T1, T2, T3, T4, T5](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5]): PType[(T1, T2, T3, T4, T5)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5])),
+        new Fns.SMap[(T1, T2, T3, T4, T5), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5))
+
+    implicit def scalaTuple6[T1, T2, T3, T4, T5, T6](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6]): PType[(T1, T2, T3, T4, T5, T6)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6))
+
+    implicit def scalaTuple7[T1, T2, T3, T4, T5, T6, T7](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7]): PType[(T1, T2, T3, T4, T5, T6, T7)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7))
+
+    implicit def scalaTuple8[T1, T2, T3, T4, T5, T6, T7, T8](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8]): PType[(T1, T2, T3, T4, T5, T6, T7, T8)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8))
+
+    implicit def scalaTuple9[T1, T2, T3, T4, T5, T6, T7, T8, T9](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9))
+
+    implicit def scalaTuple10[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10))
+
+    implicit def scalaTuple11[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11))
+
+    implicit def scalaTuple12[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12))
+
+    implicit def scalaTuple13[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13))
+
+    implicit def scalaTuple14[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14))
+
+    implicit def scalaTuple15[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14], pType15: PType[T15]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14], c.get(14).asInstanceOf[T15])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef], s._15.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14, pType15))
+
+    implicit def scalaTuple16[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14], pType15: PType[T15], pType16: PType[T16]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14], c.get(14).asInstanceOf[T15], c.get(15).asInstanceOf[T16])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef], s._15.asInstanceOf[AnyRef], s._16.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14, pType15, pType16))
+
+    implicit def scalaTuple17[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14], pType15: PType[T15], pType16: PType[T16], pType17: PType[T17]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14], c.get(14).asInstanceOf[T15], c.get(15).asInstanceOf[T16], c.get(16).asInstanceOf[T17])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef], s._15.asInstanceOf[AnyRef], s._16.asInstanceOf[AnyRef], s._17.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14, pType15, pType16, pType17))
+
+    implicit def scalaTuple18[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14], pType15: PType[T15], pType16: PType[T16], pType17: PType[T17], pType18: PType[T18]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14], c.get(14).asInstanceOf[T15], c.get(15).asInstanceOf[T16], c.get(16).asInstanceOf[T17], c.get(17).asInstanceOf[T18])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef], s._15.asInstanceOf[AnyRef], s._16.asInstanceOf[AnyRef], s._17.asInstanceOf[AnyRef], s._18.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14, pType15, pType16, pType17, pType18))
+
+    implicit def scalaTuple19[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14], pType15: PType[T15], pType16: PType[T16], pType17: PType[T17], pType18: PType[T18], pType19: PType[T19]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14], c.get(14).asInstanceOf[T15], c.get(15).asInstanceOf[T16], c.get(16).asInstanceOf[T17], c.get(17).asInstanceOf[T18], c.get(18).asInstanceOf[T19])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef], s._15.asInstanceOf[AnyRef], s._16.asInstanceOf[AnyRef], s._17.asInstanceOf[AnyRef], s._18.asInstanceOf[AnyRef], s._19.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14, pType15, pType16, pType17, pType18, pType19))
+
+    implicit def scalaTuple20[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14], pType15: PType[T15], pType16: PType[T16], pType17: PType[T17], pType18: PType[T18], pType19: PType[T19], pType20: PType[T20]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14], c.get(14).asInstanceOf[T15], c.get(15).asInstanceOf[T16], c.get(16).asInstanceOf[T17], c.get(17).asInstanceOf[T18], c.get(18).asInstanceOf[T19], c.get(19).asInstanceOf[T20])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef], s._15.asInstanceOf[AnyRef], s._16.asInstanceOf[AnyRef], s._17.asInstanceOf[AnyRef], s._18.asInstanceOf[AnyRef], s._19.asInstanceOf[AnyRef], s._20.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14, pType15, pType16, pType17, pType18, pType19, pType20))
+
+    implicit def scalaTuple21[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14], pType15: PType[T15], pType16: PType[T16], pType17: PType[T17], pType18: PType[T18], pType19: PType[T19], pType20: PType[T20], pType21: PType[T21]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14], c.get(14).asInstanceOf[T15], c.get(15).asInstanceOf[T16], c.get(16).asInstanceOf[T17], c.get(17).asInstanceOf[T18], c.get(18).asInstanceOf[T19], c.get(19).asInstanceOf[T20], c.get(20).asInstanceOf[T21])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef], s._15.asInstanceOf[AnyRef], s._16.asInstanceOf[AnyRef], s._17.asInstanceOf[AnyRef], s._18.asInstanceOf[AnyRef], s._19.asInstanceOf[AnyRef], s._20.asInstanceOf[AnyRef], s._21.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14, pType15, pType16, pType17, pType18, pType19, pType20, pType21))
+
+    implicit def scalaTuple22[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22](implicit pType1: PType[T1], pType2: PType[T2], pType3: PType[T3], pType4: PType[T4], pType5: PType[T5], pType6: PType[T6], pType7: PType[T7], pType8: PType[T8], pType9: PType[T9], pType10: PType[T10], pType11: PType[T11], pType12: PType[T12], pType13: PType[T13], pType14: PType[T14], pType15: PType[T15], pType16: PType[T16], pType17: PType[T17], pType18: PType[T18], pType19: PType[T19], pType20: PType[T20], pType21: PType[T21], pType22: PType[T22]): PType[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22)] =
+      Avros.derived(
+        classOf[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22)],
+        new Fns.SMap[CTupleN, (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22)](c => (c.get(0).asInstanceOf[T1], c.get(1).asInstanceOf[T2], c.get(2).asInstanceOf[T3], c.get(3).asInstanceOf[T4], c.get(4).asInstanceOf[T5], c.get(5).asInstanceOf[T6], c.get(6).asInstanceOf[T7], c.get(7).asInstanceOf[T8], c.get(8).asInstanceOf[T9], c.get(9).asInstanceOf[T10], c.get(10).asInstanceOf[T11], c.get(11).asInstanceOf[T12], c.get(12).asInstanceOf[T13], c.get(13).asInstanceOf[T14], c.get(14).asInstanceOf[T15], c.get(15).asInstanceOf[T16], c.get(16).asInstanceOf[T17], c.get(17).asInstanceOf[T18], c.get(18).asInstanceOf[T19], c.get(19).asInstanceOf[T20], c.get(20).asInstanceOf[T21], c.get(21).asInstanceOf[T22])),
+        new Fns.SMap[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22), CTupleN](s => CTupleN.of(s._1.asInstanceOf[AnyRef], s._2.asInstanceOf[AnyRef], s._3.asInstanceOf[AnyRef], s._4.asInstanceOf[AnyRef], s._5.asInstanceOf[AnyRef], s._6.asInstanceOf[AnyRef], s._7.asInstanceOf[AnyRef], s._8.asInstanceOf[AnyRef], s._9.asInstanceOf[AnyRef], s._10.asInstanceOf[AnyRef], s._11.asInstanceOf[AnyRef], s._12.asInstanceOf[AnyRef], s._13.asInstanceOf[AnyRef], s._14.asInstanceOf[AnyRef], s._15.asInstanceOf[AnyRef], s._16.asInstanceOf[AnyRef], s._17.asInstanceOf[AnyRef], s._18.asInstanceOf[AnyRef], s._19.asInstanceOf[AnyRef], s._20.asInstanceOf[AnyRef], s._21.asInstanceOf[AnyRef], s._22.asInstanceOf[AnyRef])),
+        Avros.tuples(pType1, pType2, pType3, pType4, pType5, pType6, pType7, pType8, pType9, pType10, pType11, pType12, pType13, pType14, pType15, pType16, pType17, pType18, pType19, pType20, pType21, pType22))
   }
 
   /**
@@ -163,10 +381,17 @@ object Sprunch {
       override def accept(input: T) = fn(input)
     }
 
-    /** Convert an initial value and fold function into a CombineFn which will fold left over values */
-    class SFoldValues[K, V](initial: V, fn: (V, V) => V) extends CombineFn[K, V] {
-      override def process(input: CPair[K, JIterable[V]], emitter: Emitter[CPair[K, V]]) =
-        emitter.emit(CPair.of(input.first(), input.second().asScala.foldLeft(initial)(fn)))
+    /** Convert a reduce function into a CombineFn which will reduce over values */
+    class SReduceValues[V](fn: (V, V) => V) extends SimpleAggregator[V] {
+      var value: V = null.asInstanceOf[V]
+      override def reset() { value = null.asInstanceOf[V] }
+      override def update(v: V) { value = if (value != null) fn(value, v) else v }
+      override def results() = ImmutableList.of(value)
+    }
+
+    /** Convert an initial value and fold function into a MapFn which will fold over values */
+    class SFoldValues[V, U](z: U, fn: (U, V) => U) extends MapFn[JIterable[V], U] {
+      override def map(input: JIterable[V]) = input.asScala.foldLeft(z)(fn)
     }
   }
 }
